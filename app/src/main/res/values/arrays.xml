@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 🎨 Theme Options -->
+    <string-array name="pref_theme_entries">
+        <item>System</item>
+        <item>Light</item>
+        <item>Dark</item>
+    </string-array>
+    <string-array name="pref_theme_values">
+        <item>system</item>
+        <item>light</item>
+        <item>dark</item>
+    </string-array>
+
+    <!-- 🔊 Alert Sounds -->
+    <string-array name="alert_sounds">
+        <item>Default</item>
+        <item>Emergency</item>
+        <item>Silent</item>
+    </string-array>
+    <string-array name="alert_sounds_values">
+        <item>default</item>
+        <item>emergency</item>
+        <item>silent</item>
+    </string-array>
+
+    <!-- ⚡ Sensitivity Options -->
+    <string-array name="pref_sensitivity_entries">
+        <item>Low</item>
+        <item>Medium</item>
+        <item>High</item>
+    </string-array>
+    <string-array name="pref_sensitivity_values">
+        <item>low</item>
+        <item>medium</item>
+        <item>high</item>
+    </string-array>
+
+    <!-- 🌐 Network Options -->
+    <string-array name="pref_network_entries">
+        <item>Sepolia (testnet)</item>
+        <item>Mainnet (custom)</item>
+        <item>Custom RPC</item>
+    </string-array>
+    <string-array name="pref_network_values">
+        <item>sepolia</item>
+        <item>mainnet</item>
+        <item>custom</item>
+    </string-array>
+
+</resources>

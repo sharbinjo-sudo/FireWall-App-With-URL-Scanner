@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 🌙 General -->
+    <PreferenceCategory android:title="General">
+        <SwitchPreferenceCompat
+            android:key="dark_mode"
+            android:title="🌙 Dark Mode"
+            android:summary="Enable dark theme for the app"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="auto_start"
+            android:title="⚡ Auto Start"
+            android:summary="Start app automatically on boot"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+    <!-- 🔐 Firewall / VPN -->
+    <PreferenceCategory android:title="Firewall / VPN">
+        <SwitchPreferenceCompat
+            android:key="vpn_always_on"
+            android:title="🔐 Always-On VPN"
+            android:summary="Keep VPN active even after reboot"
+            android:defaultValue="false" />
+
+        <SwitchPreferenceCompat
+            android:key="block_background_apps"
+            android:title="⛔ Block Background Apps"
+            android:summary="Stop blocked apps from using internet in background"
+            android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <!-- 🔎 Link Scanner -->
+    <PreferenceCategory android:title="Link Scanner">
+        <SwitchPreferenceCompat
+            android:key="sms_scanner"
+            android:title="📩 Scan SMS Links"
+            android:summary="Automatically scan links received via SMS"
+            android:defaultValue="true" />
+
+        <SwitchPreferenceCompat
+            android:key="clipboard_scanner"
+            android:title="📋 Scan Copied Links"
+            android:summary="Automatically detect and scan links copied to clipboard"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+    <!-- 🛡 ThreatLog (Blockchain) -->
+    <PreferenceCategory android:title="ThreatLog (Blockchain)">
+        <SwitchPreferenceCompat
+            android:key="share_anonymous_data"
+            android:title="🌐 Share Anonymous Threat Data"
+            android:summary="Contribute to decentralized threat intelligence"
+            android:defaultValue="false" />
+
+        <Preference
+            android:key="view_threatlog"
+            android:title="📜 View ThreatLog"
+            android:summary="Check global threat records stored on Blockchain" />
+    </PreferenceCategory>
+
+    <!-- 🔔 Notifications -->
+    <PreferenceCategory android:title="Notifications">
+        <SwitchPreferenceCompat
+            android:key="alerts_enabled"
+            android:title="🔔 Enable Alerts"
+            android:summary="Receive alerts for malicious links"
+            android:defaultValue="true" />
+
+        <ListPreference
+            android:key="alert_sound"
+            android:title="🔊 Alert Sound"
+            android:summary="Choose alert tone for malicious links"
+            android:entries="@array/alert_sounds"
+            android:entryValues="@array/alert_sounds_values"
+            android:defaultValue="default" />
+    </PreferenceCategory>
+
+    <!-- ℹ️ About -->
+    <PreferenceCategory android:title="About">
+        <Preference
+            android:key="version"
+            android:title="📱 App Version"
+            android:summary="1.0" />
+
+        <Preference
+            android:key="developer"
+            android:title="👨‍💻 Developed by"
+            android:summary="Omega" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- Instructions button -->
+    <item
+        android:id="@+id/action_instructions"
+        android:title="Instructions"
+        android:icon="@drawable/ic_info"
+        app:showAsAction="always|withText" />
+
+    <!-- Search bar -->
+    <item
+        android:id="@+id/action_search"
+        android:title="Search"
+        android:icon="@android:drawable/ic_menu_search"
+        app:showAsAction="always|collapseActionView"
+        app:actionViewClass="androidx.appcompat.widget.SearchView" />
+</menu>

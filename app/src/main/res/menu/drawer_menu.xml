@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Link Scanner -->
+    <item
+        android:id="@+id/nav_link_scanner"
+        android:title="Link Scanner"
+        android:icon="@android:drawable/ic_menu_search" />
+
+    <!-- Feedback -->
+    <item
+        android:id="@+id/nav_feedback"
+        android:title="Feedback"
+        android:icon="@android:drawable/ic_menu_send" />
+
+    <!-- Settings -->
+    <item
+        android:id="@+id/nav_settings"
+        android:title="Settings"
+        android:icon="@android:drawable/ic_menu_preferences" />
+
+    <!-- Threat Log -->
+    <item
+        android:id="@+id/nav_threat_log"
+        android:title="Threat Log"
+        android:icon="@android:drawable/ic_menu_info_details" />
+
+    <!-- Version -->
+    <item
+        android:id="@+id/nav_version"
+        android:title="Version 1.0"
+        android:enabled="false" />
+
+    <!-- Developer -->
+    <item
+        android:id="@+id/nav_developer"
+        android:title="Developed by Omega"
+        android:enabled="false" />
+
+</menu>
