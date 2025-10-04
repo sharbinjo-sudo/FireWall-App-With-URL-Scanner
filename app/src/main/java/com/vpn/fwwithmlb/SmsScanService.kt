@@ -33,7 +33,6 @@ class SmsScanService : Service() {
 
         Log.d("SmsScanService", "🔎 Scanning SMS URL: $url (from $sender)")
 
-        // Foreground notification while scanning
         startForeground(1, buildForegroundNotification("Scanning SMS link..."))
 
         Thread {
@@ -48,7 +47,7 @@ class SmsScanService : Service() {
         return START_NOT_STICKY
     }
 
-    // ✅ Normalize SMS URLs (handle hxxp, bare domains, ftp)
+    // ✅ Normalize SMS URLs (support hxxp, bare domains, ftp)
     private fun normalizeUrl(input: String): String? {
         var url = input.trim()
 
@@ -73,7 +72,7 @@ class SmsScanService : Service() {
 
     private fun scanUrl(url: String, sender: String) {
         try {
-            val apiKey = "79cb539731c911688aabc98159b95561dd38619d73178137885739903e828d34" // ⚠️ replace with your VirusTotal key
+            val apiKey = "79cb539731c911688aabc98159b95561dd38619d73178137885739903e828d34"
             val apiUrl = "https://www.virustotal.com/api/v3/urls"
 
             // Step 1: Submit URL
@@ -91,7 +90,6 @@ class SmsScanService : Service() {
             val analysisUrl = "https://www.virustotal.com/api/v3/analyses/$analysisId"
             var malicious = 0
             var phishing = 0
-            var harmless = 0
             var finished = false
 
             repeat(12) { // ~24s max wait
@@ -114,13 +112,12 @@ class SmsScanService : Service() {
 
                     malicious = stats.optInt("malicious", 0)
                     phishing = stats.optInt("phishing", 0)
-                    harmless = stats.optInt("harmless", 0)
                     finished = true
                     return@repeat
                 }
             }
 
-            // Step 3: Decide outcome
+            // ✅ Only handle malicious detections
             if (finished && (malicious > 0 || phishing > 0)) {
                 Log.w("SmsScanService", "⚠️ Malicious SMS link: $url (from $sender)")
                 ThreatLogActivity.saveLog(this, url, "SMS")
@@ -131,16 +128,14 @@ class SmsScanService : Service() {
                         "silent" -> {}
                         else -> playDefaultSound()
                     }
-                    showNotification("⚠️ Malicious SMS link detected!", "Sender: $sender\n$url", url)
+                    showNotification(
+                        "⚠️ Malicious SMS link detected!",
+                        "Sender: $sender\n$url",
+                        url
+                    )
                 }
-
-            } else if (finished && harmless > 0) {
-                Log.i("SmsScanService", "✅ Safe SMS link: $url")
-                showNotification("✅ Safe SMS link", "Sender: $sender\n$url", url)
-
             } else {
-                Log.d("SmsScanService", "ℹ️ Unknown SMS link (timeout): $url")
-                showNotification("ℹ️ Unknown SMS link", "Sender: $sender\n$url", url)
+                Log.i("SmsScanService", "✅ SMS link safe/unknown → no alert: $url")
             }
 
         } catch (e: Exception) {

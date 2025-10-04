@@ -5,4 +5,8 @@
     <!-- Drawer toggle strings -->
     <string name="navigation_drawer_open">Open navigation drawer</string>
     <string name="navigation_drawer_close">Close navigation drawer</string>
+
+    <string name="accessibility_desc">
+        Clipboard monitoring service to detect and scan copied links in real time.
+    </string>
 </resources>

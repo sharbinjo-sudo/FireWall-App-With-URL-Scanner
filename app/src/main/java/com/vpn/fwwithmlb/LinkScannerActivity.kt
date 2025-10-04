@@ -132,7 +132,7 @@ class LinkScannerActivity : AppCompatActivity() {
     private fun checkUrlWithVirusTotal(url: String) {
         Thread {
             try {
-                val apiKey = "YOUR_API_KEY"
+                val apiKey = "79cb539731c911688aabc98159b95561dd38619d73178137885739903e828d34"
                 val apiUrl = "https://www.virustotal.com/api/v3/urls"
 
                 val encodedUrl =

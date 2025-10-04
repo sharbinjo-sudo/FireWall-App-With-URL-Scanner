@@ -2,6 +2,7 @@ package com.vpn.fwwithmlb
 
 import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.preference.Preference
@@ -14,13 +15,13 @@ class SettingsFragment : PreferenceFragmentCompat(),
     override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
         setPreferencesFromResource(R.xml.settings_preferences, rootKey)
 
-        // 🔹 Handle click-only preferences
+        // 🔹 Threat Log Preference
         val threatLogPref: Preference? = findPreference("view_threatlog")
-           threatLogPref?.setOnPreferenceClickListener {
-           val intent = Intent(requireContext(), ThreatLogActivity::class.java)
-              startActivity(intent)
-         true
-       }  
+        threatLogPref?.setOnPreferenceClickListener {
+            val intent = Intent(requireContext(), ThreatLogActivity::class.java)
+            startActivity(intent)
+            true
+        }
     }
 
     override fun onResume() {
@@ -36,7 +37,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
     override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
         when (key) {
 
-            // 🌙 Dark Mode toggle (already working, unchanged)
+            // 🌙 Dark Mode toggle
             "dark_mode" -> {
                 val enabled = sharedPreferences.getBoolean(key, false)
                 PreferencesManager.setDarkMode(requireContext(), enabled)
@@ -66,7 +67,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 // BootReceiver handles actual startup
             }
 
-            // 🔐 VPN Always-On (now syncing with MainActivity toggle)
+            // 🔐 VPN Always-On
             "vpn_always_on" -> {
                 val enabled = sharedPreferences.getBoolean(key, false)
                 PreferencesManager.setVpnAlwaysOn(requireContext(), enabled)
@@ -88,21 +89,27 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 }
                 requireContext().sendBroadcast(syncIntent)
             }
-            "clipboard_scanner" -> {
-    val enabled = sharedPreferences.getBoolean(key, false)
-    Toast.makeText(
-        requireContext(),
-        if (enabled) "📋 Clipboard Scanner Enabled" else "Clipboard Scanner Disabled",
-        Toast.LENGTH_SHORT
-    ).show()
 
-    val serviceIntent = Intent(requireContext(), ClipboardMonitorService::class.java)
-    if (enabled) {
-        requireContext().startService(serviceIntent)
-    } else {
-        requireContext().stopService(serviceIntent)
-    }
-    }
+            // 📋 Clipboard Scanner (✅ fixed block)
+            "clipboard_scanner" -> {
+                val enabled = sharedPreferences.getBoolean(key, false)
+                Toast.makeText(
+                    requireContext(),
+                    if (enabled) "📋 Clipboard Scanner Enabled" else "📋 Clipboard Scanner Disabled",
+                    Toast.LENGTH_SHORT
+                ).show()
+
+                val serviceIntent = Intent(requireContext(), ClipboardMonitorService::class.java)
+                if (enabled) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        requireContext().startForegroundService(serviceIntent)
+                    } else {
+                        requireContext().startService(serviceIntent)
+                    }
+                } else {
+                    requireContext().stopService(serviceIntent)
+                }
+            }
 
             // ⛔ Block Background Apps
             "block_background_apps" -> {
@@ -120,16 +127,6 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "📩 SMS Scanner Enabled" else "SMS Scanner Disabled",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-
-            // 📋 Clipboard Scanner
-            "clipboard_scanner" -> {
-                val enabled = sharedPreferences.getBoolean(key, false)
-                Toast.makeText(
-                    requireContext(),
-                    if (enabled) "📋 Clipboard Scanner Enabled" else "Clipboard Scanner Disabled",
                     Toast.LENGTH_SHORT
                 ).show()
             }
