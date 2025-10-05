@@ -18,8 +18,7 @@ class SettingsFragment : PreferenceFragmentCompat(),
         // 🔹 Threat Log Preference
         val threatLogPref: Preference? = findPreference("view_threatlog")
         threatLogPref?.setOnPreferenceClickListener {
-            val intent = Intent(requireContext(), ThreatLogActivity::class.java)
-            startActivity(intent)
+            startActivity(Intent(requireContext(), ThreatLogActivity::class.java))
             true
         }
     }
@@ -30,25 +29,22 @@ class SettingsFragment : PreferenceFragmentCompat(),
     }
 
     override fun onPause() {
-        super.onPause()
         preferenceScreen.sharedPreferences?.unregisterOnSharedPreferenceChangeListener(this)
+        super.onPause()
     }
 
-    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences, key: String) {
+    override fun onSharedPreferenceChanged(sharedPreferences: SharedPreferences?, key: String?) {
         when (key) {
 
-            // 🌙 Dark Mode toggle
             "dark_mode" -> {
-                val enabled = sharedPreferences.getBoolean(key, false)
+                val enabled = sharedPreferences?.getBoolean(key, false) ?: false
                 PreferencesManager.setDarkMode(requireContext(), enabled)
 
                 AppCompatDelegate.setDefaultNightMode(
                     if (enabled) AppCompatDelegate.MODE_NIGHT_YES
                     else AppCompatDelegate.MODE_NIGHT_NO
                 )
-
-                requireActivity().recreate() // refresh UI
-
+                requireActivity().recreate()
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "🌙 Dark Mode Enabled" else "☀️ Light Mode Enabled",
@@ -56,22 +52,18 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 ).show()
             }
 
-            // 🚀 Auto Start
             "auto_start" -> {
-                val enabled = sharedPreferences.getBoolean(key, false)
+                val enabled = sharedPreferences?.getBoolean(key, false) ?: false
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "🚀 Auto Start Enabled (App will run on boot)" else "Auto Start Disabled",
                     Toast.LENGTH_SHORT
                 ).show()
-                // BootReceiver handles actual startup
             }
 
-            // 🔐 VPN Always-On
             "vpn_always_on" -> {
-                val enabled = sharedPreferences.getBoolean(key, false)
+                val enabled = sharedPreferences?.getBoolean(key, false) ?: false
                 PreferencesManager.setVpnAlwaysOn(requireContext(), enabled)
-
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "🔐 Always-On VPN Activated" else "VPN Always-On Disabled",
@@ -83,16 +75,14 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 }
                 requireContext().startService(vpnIntent)
 
-                // 🔄 Sync with MainActivity toggle via broadcast
                 val syncIntent = Intent("VPN_ALWAYS_ON_CHANGED").apply {
                     putExtra("enabled", enabled)
                 }
                 requireContext().sendBroadcast(syncIntent)
             }
 
-            // 📋 Clipboard Scanner (✅ fixed block)
             "clipboard_scanner" -> {
-                val enabled = sharedPreferences.getBoolean(key, false)
+                val enabled = sharedPreferences?.getBoolean(key, false) ?: false
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "📋 Clipboard Scanner Enabled" else "📋 Clipboard Scanner Disabled",
@@ -101,19 +91,17 @@ class SettingsFragment : PreferenceFragmentCompat(),
 
                 val serviceIntent = Intent(requireContext(), ClipboardMonitorService::class.java)
                 if (enabled) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                         requireContext().startForegroundService(serviceIntent)
-                    } else {
+                    else
                         requireContext().startService(serviceIntent)
-                    }
                 } else {
                     requireContext().stopService(serviceIntent)
                 }
             }
 
-            // ⛔ Block Background Apps
             "block_background_apps" -> {
-                val enabled = sharedPreferences.getBoolean(key, true)
+                val enabled = sharedPreferences?.getBoolean(key, true) ?: true
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "⛔ Blocking background apps" else "✔️ Allowing background apps",
@@ -121,9 +109,8 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 ).show()
             }
 
-            // 📩 SMS Scanner
             "sms_scanner" -> {
-                val enabled = sharedPreferences.getBoolean(key, true)
+                val enabled = sharedPreferences?.getBoolean(key, true) ?: true
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "📩 SMS Scanner Enabled" else "SMS Scanner Disabled",
@@ -131,20 +118,17 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 ).show()
             }
 
-            // 🌐 Threat Data Sharing
             "share_anonymous_data" -> {
-                val enabled = sharedPreferences.getBoolean(key, false)
+                val enabled = sharedPreferences?.getBoolean(key, false) ?: false
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "🌐 Sharing anonymous threat data" else "Stopped sharing threat data",
                     Toast.LENGTH_SHORT
                 ).show()
-                // TODO: integrate blockchain logging
             }
 
-            // 🔔 Alerts toggle
             "alerts_enabled" -> {
-                val enabled = sharedPreferences.getBoolean(key, true)
+                val enabled = sharedPreferences?.getBoolean(key, true) ?: true
                 Toast.makeText(
                     requireContext(),
                     if (enabled) "🔔 Alerts Enabled" else "Alerts Disabled",
@@ -152,9 +136,8 @@ class SettingsFragment : PreferenceFragmentCompat(),
                 ).show()
             }
 
-            // 🔊 Alert Sound
             "alert_sound" -> {
-                val value = sharedPreferences.getString(key, "default")
+                val value = sharedPreferences?.getString(key, "default")
                 Toast.makeText(
                     requireContext(),
                     "🔊 Alert sound set to: $value",

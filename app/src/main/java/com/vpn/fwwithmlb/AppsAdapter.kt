@@ -4,14 +4,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.CheckBox
-import android.widget.ImageView
-import android.widget.Switch
-import android.widget.TextView
-import android.widget.Toast
+import android.widget.*
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 
 class AppsAdapter(
@@ -23,8 +23,11 @@ class AppsAdapter(
 
     private val prefs = context.getSharedPreferences("firewall_prefs", Context.MODE_PRIVATE)
     private val appContext = context.applicationContext
-
     private var filteredApps: MutableList<ApplicationInfo> = apps.toMutableList()
+
+    // Used to debounce rapid restart requests
+    private val restartHandler = Handler(Looper.getMainLooper())
+    private var restartPending = false
 
     class AppViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val appIcon: ImageView = view.findViewById(R.id.appIcon)
@@ -51,46 +54,34 @@ class AppsAdapter(
         val vpnApps = prefs.getStringSet("vpn_apps", emptySet())!!.toMutableSet()
         val blockedApps = prefs.getStringSet("blocked_apps", emptySet())!!.toMutableSet()
 
-        // Clear old listeners
+        // remove previous listeners
         holder.appSwitch.setOnCheckedChangeListener(null)
         holder.appCheckBox.setOnCheckedChangeListener(null)
 
+        // 🟢 All toggles enabled (VPN or not)
+        holder.appSwitch.isEnabled = true
+        holder.appCheckBox.isEnabled = true
+
+        // Default ON for checkbox (internet enabled) if no saved state
+        val isBlocked = blockedApps.contains(pkg)
+        holder.appCheckBox.isChecked = !isBlocked // inverse logic → checked = internet allowed
         holder.appSwitch.isChecked = vpnApps.contains(pkg)
-        holder.appCheckBox.isChecked = blockedApps.contains(pkg)
 
-        holder.appSwitch.isEnabled = vpnEnabled
-        holder.appCheckBox.isEnabled = vpnEnabled
-
-        if (!vpnEnabled) return
-
-        // Switch = VPN routing
+        // 🌐 Switch → Include in VPN
         holder.appSwitch.setOnCheckedChangeListener { _, isChecked ->
-            if (!NetworkUtils.isNetworkAvailable(appContext)) {
-                holder.appSwitch.isChecked = vpnApps.contains(pkg)
-                Toast.makeText(appContext, "❌ No internet connection", Toast.LENGTH_SHORT).show()
-                return@setOnCheckedChangeListener
-            }
-
             val updated = prefs.getStringSet("vpn_apps", emptySet())!!.toMutableSet()
             if (isChecked) updated.add(pkg) else updated.remove(pkg)
-            prefs.edit().putStringSet("vpn_apps", updated).apply()
-
-            restartVpn()
+            prefs.edit().putStringSet("vpn_apps", HashSet(updated)).apply()
+            scheduleVpnRestart()
         }
 
-        // CheckBox = Block Internet
+        // 🚫 Checkbox → Block/Unblock app
         holder.appCheckBox.setOnCheckedChangeListener { _, isChecked ->
-            if (!NetworkUtils.isNetworkAvailable(appContext)) {
-                holder.appCheckBox.isChecked = blockedApps.contains(pkg)
-                Toast.makeText(appContext, "❌ No internet connection", Toast.LENGTH_SHORT).show()
-                return@setOnCheckedChangeListener
-            }
-
             val updated = prefs.getStringSet("blocked_apps", emptySet())!!.toMutableSet()
-            if (isChecked) updated.add(pkg) else updated.remove(pkg)
-            prefs.edit().putStringSet("blocked_apps", updated).apply()
-
-            restartVpn()
+            // inverse logic: checked = internet allowed, unchecked = blocked
+            if (!isChecked) updated.add(pkg) else updated.remove(pkg)
+            prefs.edit().putStringSet("blocked_apps", HashSet(updated)).apply()
+            scheduleVpnRestart()
         }
     }
 
@@ -113,9 +104,39 @@ class AppsAdapter(
         notifyDataSetChanged()
     }
 
-    // 🔹 Restart VPN so changes apply instantly
+    /**
+     * 🔁 Delayed (debounced) VPN restart to avoid ANR/freezes.
+     */
+    private fun scheduleVpnRestart() {
+        if (restartPending) {
+            restartHandler.removeCallbacksAndMessages(null)
+        }
+        restartPending = true
+        restartHandler.postDelayed({
+            restartPending = false
+            restartVpn()
+        }, 1500) // restart 1.5s after last toggle
+    }
+
+    /**
+     * 🧠 Restart VPN service safely with new rules.
+     */
     private fun restartVpn() {
-        appContext.stopService(Intent(appContext, MyVpnService::class.java))
-        appContext.startService(Intent(appContext, MyVpnService::class.java))
+        try {
+            val stopIntent = Intent(appContext, MyVpnService::class.java)
+            appContext.stopService(stopIntent)
+
+            val restartIntent = Intent(appContext, MyVpnService::class.java).apply {
+                action = "RELOAD_RULES"
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ContextCompat.startForegroundService(appContext, restartIntent)
+            } else {
+                appContext.startService(restartIntent)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 }

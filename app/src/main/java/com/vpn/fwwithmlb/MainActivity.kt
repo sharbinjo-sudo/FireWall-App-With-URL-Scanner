@@ -92,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         navigationView.setNavigationItemSelectedListener { menuItem ->
             when (menuItem.itemId) {
                 R.id.nav_link_scanner -> startActivity(Intent(this, LinkScannerActivity::class.java))
-                R.id.nav_threat_log -> startActivity(Intent(this, ThreatLogActivity::class.java)) // ✅ Ensure menu XML has nav_threat_log
+                R.id.nav_threat_log -> startActivity(Intent(this, ThreatLogActivity::class.java))
                 R.id.nav_feedback -> {
                     val formUrl =
                         "https://docs.google.com/forms/d/e/1FAIpQLSc2gBa4RwUtoNYz3l_zpuG7izPcUnKKMbzr-HriwbmkqVvuDg/viewform?usp=dialog"
@@ -180,7 +180,7 @@ class MainActivity : AppCompatActivity() {
 
         // VPN toggle switch
         vpnToggle.setOnCheckedChangeListener { _, isChecked ->
-            PreferencesManager.setVpnAlwaysOn(this, isChecked) // ✅ keep synced
+            PreferencesManager.setVpnAlwaysOn(this, isChecked)
             try {
                 if (isChecked) {
                     if (!NetworkUtils.isNetworkAvailable(this)) {
@@ -232,7 +232,7 @@ class MainActivity : AppCompatActivity() {
                 AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
                 themeToggleFab.setImageResource(R.drawable.ic_baseline_dark_mode_24)
             }
-            recreate() // refresh UI
+            recreate()
         }
     }
 
@@ -273,16 +273,39 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ✅ Fixed section: registerReceiver crash solved
     override fun onStart() {
         super.onStart()
-        registerReceiver(vpnStartedReceiver, IntentFilter("VPN_STARTED"))
-        registerReceiver(vpnStoppedReceiver, IntentFilter("VPN_STOPPED"))
+
+        val receiverFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        } else {
+            0
+        }
+
+        ContextCompat.registerReceiver(
+            this,
+            vpnStartedReceiver,
+            IntentFilter("VPN_STARTED"),
+            receiverFlags
+        )
+
+        ContextCompat.registerReceiver(
+            this,
+            vpnStoppedReceiver,
+            IntentFilter("VPN_STOPPED"),
+            receiverFlags
+        )
     }
 
     override fun onStop() {
         super.onStop()
-        unregisterReceiver(vpnStartedReceiver)
-        unregisterReceiver(vpnStoppedReceiver)
+        try {
+            unregisterReceiver(vpnStartedReceiver)
+            unregisterReceiver(vpnStoppedReceiver)
+        } catch (e: IllegalArgumentException) {
+            // Ignore: already unregistered
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
