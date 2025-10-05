@@ -11,15 +11,6 @@ import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 
-/**
- * MyVpnService — VPN that uses Builder.addAllowedApplication() for strict rules,
- * and also notifies the native bridge (if present) with blocked UIDs.
- *
- * IMPORTANT:
- * - On unrooted Android, to *fully prevent* apps from using the network outside the VPN,
- *   the user must enable Always-On VPN with Lockdown in system settings for this VPN app.
- *   Without that, excluded apps may still use the device network and will not be blocked.
- */
 class MyVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -52,135 +43,104 @@ class MyVpnService : VpnService() {
             return
         }
 
-        try {
-            // Load blocked packages from prefs
-            val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
-            val blockedPackages = prefs.getStringSet("blocked_apps", emptySet()) ?: emptySet()
-            Log.d(TAG, "Blocked packages from prefs: $blockedPackages")
+        // Start foreground service immediately to avoid timeout
+        startForeground(NOTIFICATION_ID, buildNotification("Starting Firewall VPN…"))
 
-            // Get list of all launchable apps (visible to user)
-            val pm = packageManager
-            val launchIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                addCategory(Intent.CATEGORY_LAUNCHER)
-            }
-            val launchablePkgs = pm.queryIntentActivities(launchIntent, 0)
-                .mapNotNull { it.activityInfo?.applicationInfo?.packageName }
-                .toSet()
-
-            // Allowed apps = all launchable apps MINUS blocked
-            val allowedPkgs = launchablePkgs.filterNot { blockedPackages.contains(it) }
-
-            Log.i(TAG, "Allowed apps count=${allowedPkgs.size} Blocked count=${blockedPackages.size}")
-
-            // Build VPN: capture all IPv4; restrict to allowed apps only (strict rule)
-            val builder = Builder()
-                .setSession("FW with MLB Firewall")
-                .addAddress("10.0.0.2", 32)
-                .addDnsServer("1.1.1.1")
-                .addDnsServer("8.8.8.8")
-                .addRoute("0.0.0.0", 0) // capture IPv4
-
-            // IMPORTANT: addAllowedApplication restricts the VPN to these apps only.
-            // If you want the blocked apps to be unable to use network at all, the user
-            // must enable Always-on VPN + Lockdown for this app (Android settings).
-            for (pkg in allowedPkgs) {
-                try {
-                    builder.addAllowedApplication(pkg)
-                } catch (e: PackageManager.NameNotFoundException) {
-                    Log.w(TAG, "Allowed app not found: $pkg")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Failed addAllowedApplication($pkg): ${e.message}")
-                }
-            }
-
-            // Establish VPN
-            vpnInterface = builder.establish()
-            if (vpnInterface == null) {
-                Log.e(TAG, "Failed to establish VPN interface.")
-                stopSelf()
-                return
-            }
-
-            // Send blocked UIDs to native layer (best-effort)
+        Thread {
             try {
-                val blockedUids = mutableListOf<Int>()
-                for (pkg in blockedPackages) {
+                val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
+                val blockedPackages = prefs.getStringSet("blocked_apps", emptySet()) ?: emptySet()
+                val pm = packageManager
+
+                val launchIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                }
+                val launchablePkgs = pm.queryIntentActivities(launchIntent, 0)
+                    .mapNotNull { it.activityInfo?.applicationInfo?.packageName }
+                    .toSet()
+
+                val allowedPkgs = launchablePkgs.filterNot { blockedPackages.contains(it) }
+
+                val builder = Builder()
+                    .setSession("FW with MLB Firewall")
+                    .addAddress("10.0.0.2", 32)
+                    .addDnsServer("1.1.1.1")
+                    .addDnsServer("8.8.8.8")
+                    .addRoute("0.0.0.0", 0)
+
+                for (pkg in allowedPkgs) {
                     try {
-                        val ai = pm.getApplicationInfo(pkg, 0)
-                        blockedUids.add(ai.uid)
-                        Log.i(TAG, "Will block UID=${ai.uid} for package=$pkg")
-                    } catch (e: PackageManager.NameNotFoundException) {
-                        Log.w(TAG, "Cannot resolve package to UID: $pkg")
+                        builder.addAllowedApplication(pkg)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to allow $pkg: ${e.message}")
                     }
                 }
-                if (blockedUids.isNotEmpty()) {
-                    // Call native (if present). JNI signature must exist in NativeBridge.kt
-                    NativeBridge.setBlockedUidsNative(blockedUids.toIntArray())
-                }
-            } catch (e: Throwable) {
-                Log.w(TAG, "Error preparing blocked UIDs for native: ${e.message}")
-            }
 
-            // Start native bridge (best-effort) with integer fd if available
-            try {
-                val fd = vpnInterface?.fd
-                if (fd != null) {
-                    NativeBridge.startNative(fd)
-                    Log.i(TAG, "NativeBridge.startNative called with fd=$fd")
-                } else {
-                    Log.w(TAG, "vpnInterface.fd was null")
+                vpnInterface = builder.establish()
+                if (vpnInterface == null) {
+                    Log.e(TAG, "❌ Failed to establish VPN interface.")
+                    stopForeground(true)
+                    stopSelf()
+                    return@Thread
                 }
-            } catch (e: Throwable) {
-                Log.w(TAG, "NativeBridge.startNative failed: ${e.message}")
-            }
 
-            // Optional packet monitor (debug)
-            vpnThread = Thread {
                 try {
-                    val inFd = vpnInterface?.fileDescriptor ?: return@Thread
-                    val input = FileInputStream(inFd)
-                    val buffer = ByteArray(32767)
-                    while (!Thread.interrupted()) {
-                        val r = input.read(buffer)
-                        if (r > 0) {
-                            val packet = ByteBuffer.wrap(buffer, 0, r)
-                            val first = packet.get(0).toInt() and 0xFF
-                            val version = first shr 4
-                            if (version == 4) {
-                                Log.v(TAG, "Captured IPv4 packet length=$r")
+                    val blockedUids = blockedPackages.mapNotNull {
+                        try { pm.getApplicationInfo(it, 0).uid } catch (_: Exception) { null }
+                    }
+                    if (blockedUids.isNotEmpty()) {
+                        NativeBridge.setBlockedUidsNative(blockedUids.toIntArray())
+                    }
+                } catch (e: Throwable) {
+                    Log.w(TAG, "Error sending UIDs to native: ${e.message}")
+                }
+
+                vpnInterface?.fd?.let {
+                    try {
+                        NativeBridge.startNative(it)
+                        Log.i(TAG, "NativeBridge started with fd=$it")
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "NativeBridge.startNative failed: ${e.message}")
+                    }
+                }
+
+                vpnThread = Thread {
+                    try {
+                        val inFd = vpnInterface?.fileDescriptor ?: return@Thread
+                        val input = FileInputStream(inFd)
+                        val buffer = ByteArray(32767)
+                        while (!Thread.interrupted()) {
+                            val r = input.read(buffer)
+                            if (r > 0) {
+                                val version = (buffer[0].toInt() and 0xF0) shr 4
+                                if (version == 4) Log.v(TAG, "Captured IPv4 packet length=$r")
                             }
                         }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "VPN read thread ended: ${e.message}")
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "VPN read thread ended: ${e.message}")
-                }
+                }.also { it.start() }
+
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.notify(NOTIFICATION_ID, buildNotification("Firewall VPN Active"))
+
+                sendBroadcast(Intent("VPN_STARTED"))
+                Log.i(TAG, "✅ VPN started successfully (${allowedPkgs.size} allowed apps).")
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting VPN: ${e.message}", e)
+                stopForeground(true)
+                stopSelf()
             }
-            vpnThread?.start()
-
-            // Foreground notification
-            startForeground(NOTIFICATION_ID, buildNotification())
-            sendBroadcast(Intent("VPN_STARTED"))
-            Log.i(TAG, "VPN started successfully (allowedPkgs=${allowedPkgs.size}).")
-
-            // NOTE TO DEVELOPER / TESTER:
-            // If you want full blocking (blocked apps cannot access network),
-            // go to Android Settings -> Network & internet -> VPN -> (this app)
-            // and enable "Always-on" and "Block connections without VPN" (Lockdown).
-            // Without that, apps excluded from the VPN may still reach the network directly.
-
-        } catch (e: Exception) {
-            Log.e(TAG, "Error starting VPN: ${e.message}", e)
-            stopSelf()
-        }
+        }.start()
     }
 
     private fun stopVpn() {
-        Log.i(TAG, "Stopping VPN...")
+        Log.i(TAG, "🛑 Stopping VPN...")
         try {
             vpnThread?.interrupt()
             vpnThread = null
 
-            // best-effort notify native to stop
             try {
                 NativeBridge.stopNative()
             } catch (e: Throwable) {
@@ -191,13 +151,13 @@ class MyVpnService : VpnService() {
             vpnInterface = null
             stopForeground(true)
             sendBroadcast(Intent("VPN_STOPPED"))
-            Log.i(TAG, "VPN stopped.")
+            Log.i(TAG, "✅ VPN stopped.")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping VPN: ${e.message}", e)
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildNotification(text: String): Notification {
         val disconnectIntent = Intent(this, MyVpnService::class.java).apply { action = "DISCONNECT" }
         val disconnectPendingIntent = PendingIntent.getService(
             this, 0, disconnectIntent,
@@ -222,8 +182,8 @@ class MyVpnService : VpnService() {
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Firewall VPN Active")
-            .setContentText("Strict rules applied for selected apps")
+            .setContentTitle("Firewall VPN")
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_firewall)
             .setContentIntent(mainPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", disconnectPendingIntent)

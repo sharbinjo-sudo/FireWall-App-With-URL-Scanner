@@ -25,7 +25,6 @@ class AppsAdapter(
     private val appContext = context.applicationContext
     private var filteredApps: MutableList<ApplicationInfo> = apps.toMutableList()
 
-    // Used to debounce rapid restart requests
     private val restartHandler = Handler(Looper.getMainLooper())
     private var restartPending = false
 
@@ -51,23 +50,46 @@ class AppsAdapter(
         holder.packageName.text = pkg
         holder.appIcon.setImageDrawable(pm.getApplicationIcon(appInfo))
 
-        val vpnApps = prefs.getStringSet("vpn_apps", emptySet())!!.toMutableSet()
-        val blockedApps = prefs.getStringSet("blocked_apps", emptySet())!!.toMutableSet()
+        // Load saved states
+        var vpnApps = prefs.getStringSet("vpn_apps", null)
+        var blockedApps = prefs.getStringSet("blocked_apps", null)
+        val savedVersion = prefs.getInt("saved_app_version", -1)
+        val currentVersion = try {
+            pm.getPackageInfo(appContext.packageName, 0).versionCode
+        } catch (e: Exception) {
+            -1
+        }
 
-        // remove previous listeners
+        val isFirstLaunchOrUpdate = savedVersion != currentVersion
+
+        // 🧩 On first install OR after each update: all switches ON, checkboxes UNCHECKED
+        if (isFirstLaunchOrUpdate) {
+            vpnApps = apps.map { it.packageName }.toMutableSet() // all ON
+            blockedApps = apps.map { it.packageName }.toMutableSet() // all unchecked = blocked
+            prefs.edit()
+                .putStringSet("vpn_apps", vpnApps)
+                .putStringSet("blocked_apps", blockedApps)
+                .putInt("saved_app_version", currentVersion)
+                .apply()
+        }
+
+        val vpnSet = vpnApps?.toMutableSet() ?: mutableSetOf()
+        val blockedSet = blockedApps?.toMutableSet() ?: mutableSetOf()
+
+        // Remove listeners to avoid unwanted triggers during binding
         holder.appSwitch.setOnCheckedChangeListener(null)
         holder.appCheckBox.setOnCheckedChangeListener(null)
 
-        // 🟢 All toggles enabled (VPN or not)
+        // 🔘 Switch setup
         holder.appSwitch.isEnabled = true
+        holder.appSwitch.isChecked = vpnSet.contains(pkg)
+
+        // ☐ Checkbox setup
+        val isBlocked = blockedSet.contains(pkg)
         holder.appCheckBox.isEnabled = true
+        holder.appCheckBox.isChecked = !isBlocked
 
-        // Default ON for checkbox (internet enabled) if no saved state
-        val isBlocked = blockedApps.contains(pkg)
-        holder.appCheckBox.isChecked = !isBlocked // inverse logic → checked = internet allowed
-        holder.appSwitch.isChecked = vpnApps.contains(pkg)
-
-        // 🌐 Switch → Include in VPN
+        // 🌐 Switch toggle → add/remove from VPN
         holder.appSwitch.setOnCheckedChangeListener { _, isChecked ->
             val updated = prefs.getStringSet("vpn_apps", emptySet())!!.toMutableSet()
             if (isChecked) updated.add(pkg) else updated.remove(pkg)
@@ -75,10 +97,9 @@ class AppsAdapter(
             scheduleVpnRestart()
         }
 
-        // 🚫 Checkbox → Block/Unblock app
+        // 🚫 Checkbox toggle → add/remove from blocked list
         holder.appCheckBox.setOnCheckedChangeListener { _, isChecked ->
             val updated = prefs.getStringSet("blocked_apps", emptySet())!!.toMutableSet()
-            // inverse logic: checked = internet allowed, unchecked = blocked
             if (!isChecked) updated.add(pkg) else updated.remove(pkg)
             prefs.edit().putStringSet("blocked_apps", HashSet(updated)).apply()
             scheduleVpnRestart()
@@ -104,23 +125,15 @@ class AppsAdapter(
         notifyDataSetChanged()
     }
 
-    /**
-     * 🔁 Delayed (debounced) VPN restart to avoid ANR/freezes.
-     */
     private fun scheduleVpnRestart() {
-        if (restartPending) {
-            restartHandler.removeCallbacksAndMessages(null)
-        }
+        if (restartPending) restartHandler.removeCallbacksAndMessages(null)
         restartPending = true
         restartHandler.postDelayed({
             restartPending = false
             restartVpn()
-        }, 1500) // restart 1.5s after last toggle
+        }, 1500)
     }
 
-    /**
-     * 🧠 Restart VPN service safely with new rules.
-     */
     private fun restartVpn() {
         try {
             val stopIntent = Intent(appContext, MyVpnService::class.java)
