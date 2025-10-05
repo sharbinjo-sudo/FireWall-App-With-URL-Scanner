@@ -4,7 +4,7 @@
 
     <!-- Package visibility rules for Android 11+ -->
     <queries>
-        <!-- All user-launchable apps (Chrome, WhatsApp, etc.) -->
+        <!-- All user-launchable apps -->
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
@@ -66,8 +66,9 @@
         </activity>
 
         <!-- Threat Log Activity -->
-        <activity android:name=".ThreatLogActivity"
-          android:exported="true" />
+        <activity
+            android:name=".ThreatLogActivity"
+            android:exported="true" />
 
         <!-- Settings Activity -->
         <activity
@@ -76,40 +77,40 @@
             android:label="Settings" />
 
         <!-- VPN Service -->
-        <service
-            android:name=".MyVpnService"
-            android:permission="android.permission.BIND_VPN_SERVICE"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
+<service
+    android:name=".MyVpnService"
+    android:permission="android.permission.BIND_VPN_SERVICE"
+    android:exported="false">
+    <intent-filter>
+        <action android:name="android.net.VpnService" />
+    </intent-filter>
+</service>
 
         <!-- SMS Scan Service -->
         <service
             android:name=".SmsScanService"
             android:enabled="true"
             android:exported="false" />
-         <service
-    android:name=".ClipboardAccessibilityService"
-    android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-    android:exported="true">
-    <intent-filter>
-        <action android:name="android.accessibilityservice.AccessibilityService" />
-    </intent-filter>
 
-    <meta-data
-        android:name="android.accessibilityservice"
-        android:resource="@xml/accessibility_service_config" />
-</service>
+        <!-- Accessibility Clipboard Scanner -->
+        <service
+            android:name=".ClipboardAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
 
         <!-- Clipboard Monitor Service -->
         <service
-    android:name=".ClipboardMonitorService"
-    android:enabled="true"
-    android:exported="false"
-    android:foregroundServiceType="dataSync|connectedDevice|mediaProjection|location" />
+            android:name=".ClipboardMonitorService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync|connectedDevice|mediaProjection|location" />
 
         <!-- SMS Receiver -->
         <receiver
