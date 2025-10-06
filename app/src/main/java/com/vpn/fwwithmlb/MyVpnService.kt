@@ -8,191 +8,262 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.*
 import java.io.FileInputStream
-import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MyVpnService : VpnService() {
 
     private var vpnInterface: ParcelFileDescriptor? = null
-    private var vpnThread: Thread? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val running = AtomicBoolean(false)
 
     private val CHANNEL_ID = "firewall_channel"
     private val NOTIFICATION_ID = 1
     private val TAG = "MyVpnService"
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            "DISCONNECT" -> {
-                stopVpn()
-                return START_NOT_STICKY
-            }
-            "RELOAD_RULES" -> {
-                Log.d(TAG, "♻️ Reloading rules...")
-                stopVpn()
-                startVpn()
-                return START_STICKY
-            }
-            else -> startVpn()
-        }
-        return START_STICKY
+    companion object {
+        @Volatile
+        var isRunning = false
     }
 
-    private fun startVpn() {
-        if (vpnInterface != null) {
-            Log.d(TAG, "VPN already running — skip start.")
-            return
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        val action = intent?.action
+        try {
+            when (action) {
+                "DISCONNECT" -> {
+                    // immediate UI-visible state change
+                    setRunningPref(false)
+                    sendBroadcastWithPackage(Intent("VPN_DISCONNECTING"))
+                    sendDisconnectingNotification()
+                    stopVpn()
+                    return START_NOT_STICKY
+                }
+
+                "RELOAD_RULES" -> {
+                    serviceScope.launch { reloadRules() }
+                    return START_NOT_STICKY
+                }
+
+                "VPN_STATUS_QUERY" -> {
+                    val status = if (running.get()) "VPN_STARTED" else "VPN_STOPPED"
+                    sendBroadcastWithPackage(Intent(status))
+                    return START_NOT_STICKY
+                }
+
+                else -> {
+                    if (running.get()) return START_STICKY
+                    running.set(true)
+                    isRunning = true
+                    // immediate notification so system doesn't ANR
+                    startForeground(NOTIFICATION_ID, buildNotification("Connecting..."))
+                    // Do heavy work off main thread
+                    serviceScope.launch { safeStartVpn() }
+                    return START_STICKY
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "onStartCommand error: ${e.message}", e)
+            stopSelfAndReset()
+            return START_NOT_STICKY
+        }
+    }
+
+    private suspend fun safeStartVpn() = withContext(Dispatchers.IO) {
+        try {
+            startVpnInternal()
+        } catch (e: Exception) {
+            Log.e(TAG, "safeStartVpn failed: ${e.message}", e)
+            stopSelfAndReset()
+        }
+    }
+
+    private suspend fun startVpnInternal() = withContext(Dispatchers.IO) {
+        val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
+        val blockedPackages = prefs.getStringSet("blocked_apps", emptySet()) ?: emptySet()
+        val pm = packageManager
+
+        val builder = Builder()
+            .setSession("FW with MLB Firewall")
+            .addAddress("10.0.0.2", 32)
+            .addDnsServer("1.1.1.1")
+            .addDnsServer("8.8.8.8")
+            .addRoute("0.0.0.0", 0)
+
+        val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+
+        if (blockedPackages.isNotEmpty() && blockedPackages.size < installed.size / 2) {
+            for (pkg in blockedPackages) try { builder.addDisallowedApplication(pkg) } catch (_: Exception) {}
+        } else {
+            for (app in installed) try {
+                if (!blockedPackages.contains(app.packageName))
+                    builder.addAllowedApplication(app.packageName)
+            } catch (_: Exception) {}
         }
 
-        // Start foreground service immediately to avoid timeout
-        startForeground(NOTIFICATION_ID, buildNotification("Starting Firewall VPN…"))
+        vpnInterface = builder.establish()
+        if (vpnInterface == null) {
+            stopSelfAndReset()
+            return@withContext
+        }
 
-        Thread {
+        // Mark running immediately and persist
+        setRunningPref(true)
+        isRunning = true
+
+        // small delay ensures UI receivers are ready
+        delay(250)
+        sendBroadcastWithPackage(Intent("VPN_STARTED"))
+        updateNotificationConnected()
+        Log.i(TAG, "VPN connected")
+
+        startNativeFirewall(blockedPackages, pm)
+        startPacketMonitor()
+    }
+
+    private fun startNativeFirewall(blockedPackages: Set<String>, pm: PackageManager) {
+        serviceScope.launch(Dispatchers.IO) {
             try {
-                val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
-                val blockedPackages = prefs.getStringSet("blocked_apps", emptySet()) ?: emptySet()
-                val pm = packageManager
-
-                val launchIntent = Intent(Intent.ACTION_MAIN, null).apply {
-                    addCategory(Intent.CATEGORY_LAUNCHER)
+                val blockedUids = blockedPackages.mapNotNull {
+                    try { pm.getApplicationInfo(it, 0).uid } catch (_: Exception) { null }
+                }.toIntArray()
+                if (blockedUids.isNotEmpty()) {
+                    try { NativeBridge.setBlockedUidsNative(blockedUids) } catch (_: Throwable) {}
                 }
-                val launchablePkgs = pm.queryIntentActivities(launchIntent, 0)
-                    .mapNotNull { it.activityInfo?.applicationInfo?.packageName }
-                    .toSet()
-
-                val allowedPkgs = launchablePkgs.filterNot { blockedPackages.contains(it) }
-
-                val builder = Builder()
-                    .setSession("FW with MLB Firewall")
-                    .addAddress("10.0.0.2", 32)
-                    .addDnsServer("1.1.1.1")
-                    .addDnsServer("8.8.8.8")
-                    .addRoute("0.0.0.0", 0)
-
-                for (pkg in allowedPkgs) {
-                    try {
-                        builder.addAllowedApplication(pkg)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to allow $pkg: ${e.message}")
-                    }
+                vpnInterface?.fd?.let { fd ->
+                    try { NativeBridge.startNative(fd) } catch (_: Throwable) { Log.w(TAG, "native start failed") }
                 }
-
-                vpnInterface = builder.establish()
-                if (vpnInterface == null) {
-                    Log.e(TAG, "❌ Failed to establish VPN interface.")
-                    stopForeground(true)
-                    stopSelf()
-                    return@Thread
-                }
-
-                try {
-                    val blockedUids = blockedPackages.mapNotNull {
-                        try { pm.getApplicationInfo(it, 0).uid } catch (_: Exception) { null }
-                    }
-                    if (blockedUids.isNotEmpty()) {
-                        NativeBridge.setBlockedUidsNative(blockedUids.toIntArray())
-                    }
-                } catch (e: Throwable) {
-                    Log.w(TAG, "Error sending UIDs to native: ${e.message}")
-                }
-
-                vpnInterface?.fd?.let {
-                    try {
-                        NativeBridge.startNative(it)
-                        Log.i(TAG, "NativeBridge started with fd=$it")
-                    } catch (e: Throwable) {
-                        Log.w(TAG, "NativeBridge.startNative failed: ${e.message}")
-                    }
-                }
-
-                vpnThread = Thread {
-                    try {
-                        val inFd = vpnInterface?.fileDescriptor ?: return@Thread
-                        val input = FileInputStream(inFd)
-                        val buffer = ByteArray(32767)
-                        while (!Thread.interrupted()) {
-                            val r = input.read(buffer)
-                            if (r > 0) {
-                                val version = (buffer[0].toInt() and 0xF0) shr 4
-                                if (version == 4) Log.v(TAG, "Captured IPv4 packet length=$r")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "VPN read thread ended: ${e.message}")
-                    }
-                }.also { it.start() }
-
-                val nm = getSystemService(NotificationManager::class.java)
-                nm.notify(NOTIFICATION_ID, buildNotification("Firewall VPN Active"))
-
-                sendBroadcast(Intent("VPN_STARTED"))
-                Log.i(TAG, "✅ VPN started successfully (${allowedPkgs.size} allowed apps).")
-
             } catch (e: Exception) {
-                Log.e(TAG, "Error starting VPN: ${e.message}", e)
-                stopForeground(true)
-                stopSelf()
+                Log.e(TAG, "startNativeFirewall error: ${e.message}", e)
             }
-        }.start()
+        }
+    }
+
+    private fun startPacketMonitor() {
+        serviceScope.launch(Dispatchers.IO) {
+            try {
+                val input = FileInputStream(vpnInterface?.fileDescriptor ?: return@launch)
+                val buffer = ByteArray(8192)
+                while (running.get()) {
+                    val r = try { input.read(buffer) } catch (_: Exception) { -1 }
+                    if (r <= 0) delay(50)
+                }
+                try { input.close() } catch (_: Exception) {}
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun reloadRules() = withContext(Dispatchers.IO) {
+        try {
+            val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
+            val blockedPackages = prefs.getStringSet("blocked_apps", emptySet()) ?: emptySet()
+            val pm = packageManager
+            val blockedUids = blockedPackages.mapNotNull {
+                try { pm.getApplicationInfo(it, 0).uid } catch (_: Exception) { null }
+            }.toIntArray()
+            if (blockedUids.isNotEmpty()) try { NativeBridge.setBlockedUidsNative(blockedUids) } catch (_: Throwable) {}
+        } catch (_: Exception) {}
     }
 
     private fun stopVpn() {
-        Log.i(TAG, "🛑 Stopping VPN...")
-        try {
-            vpnThread?.interrupt()
-            vpnThread = null
+        if (!running.get()) {
+            stopSelf()
+            return
+        }
 
+        // mark not running immediately so UI queries read correct state
+        setRunningPref(false)
+        isRunning = false
+        running.set(false)
+
+        serviceScope.launch(Dispatchers.IO) {
             try {
-                NativeBridge.stopNative()
-            } catch (e: Throwable) {
-                Log.w(TAG, "NativeBridge.stopNative failed: ${e.message}")
+                try { NativeBridge.stopNative() } catch (_: Throwable) {}
+                try { vpnInterface?.close() } catch (_: Exception) {}
+                vpnInterface = null
+                delay(500)
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                sendBroadcastWithPackage(Intent("VPN_STOPPED"))
+                updateNotificationStopped()
+                Log.i(TAG, "VPN stopped")
+            } catch (e: Exception) {
+                Log.e(TAG, "stopVpn error: ${e.message}", e)
+            } finally {
+                stopSelf()
             }
-
-            vpnInterface?.close()
-            vpnInterface = null
-            stopForeground(true)
-            sendBroadcast(Intent("VPN_STOPPED"))
-            Log.i(TAG, "✅ VPN stopped.")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error stopping VPN: ${e.message}", e)
         }
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun stopSelfAndReset() {
+        running.set(false)
+        isRunning = false
+        setRunningPref(false)
+        try { stopForeground(STOP_FOREGROUND_REMOVE) } catch (_: Exception) {}
+        sendBroadcastWithPackage(Intent("VPN_STOPPED"))
+        stopSelf()
+    }
+
+    private fun buildNotification(statusText: String): Notification {
         val disconnectIntent = Intent(this, MyVpnService::class.java).apply { action = "DISCONNECT" }
         val disconnectPendingIntent = PendingIntent.getService(
-            this, 0, disconnectIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or (
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-                    )
+            this, 1001, disconnectIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
         )
 
         val mainIntent = Intent(this, MainActivity::class.java)
         val mainPendingIntent = PendingIntent.getActivity(
-            this, 0, mainIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or (
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-                    )
+            this, 1002, mainIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0)
         )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID, "Firewall VPN Service", NotificationManager.IMPORTANCE_LOW
-            )
+            val channel = NotificationChannel(CHANNEL_ID, "Firewall VPN Service", NotificationManager.IMPORTANCE_LOW)
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Firewall VPN")
-            .setContentText(text)
+            .setContentText(statusText)
             .setSmallIcon(R.drawable.ic_firewall)
             .setContentIntent(mainPendingIntent)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", disconnectPendingIntent)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .build()
+    }
+
+    private fun updateNotificationConnected() {
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID, buildNotification("Connected — secure"))
+    }
+
+    private fun sendDisconnectingNotification() {
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID, buildNotification("Disconnecting..."))
+    }
+
+    private fun updateNotificationStopped() {
+        getSystemService(NotificationManager::class.java)
+            ?.notify(NOTIFICATION_ID, buildNotification("Disconnected — not secure"))
+    }
+
+    private fun setRunningPref(value: Boolean) {
+        try {
+            getSharedPreferences("firewall_prefs", MODE_PRIVATE)
+                .edit().putBoolean("vpn_running", value).apply()
+        } catch (_: Exception) {}
+    }
+
+    private fun sendBroadcastWithPackage(intent: Intent) {
+        try {
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+        } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
         super.onDestroy()
         stopVpn()
+        serviceScope.cancel()
     }
 }

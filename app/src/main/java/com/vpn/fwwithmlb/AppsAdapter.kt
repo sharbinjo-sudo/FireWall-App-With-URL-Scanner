@@ -13,6 +13,8 @@ import android.view.ViewGroup
 import android.widget.*
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
+import kotlinx.coroutines.*
+import java.lang.ref.WeakReference
 
 class AppsAdapter(
     private val apps: List<ApplicationInfo>,
@@ -23,10 +25,13 @@ class AppsAdapter(
 
     private val prefs = context.getSharedPreferences("firewall_prefs", Context.MODE_PRIVATE)
     private val appContext = context.applicationContext
+    private val contextRef = WeakReference(context)
     private var filteredApps: MutableList<ApplicationInfo> = apps.toMutableList()
 
-    private val restartHandler = Handler(Looper.getMainLooper())
-    private var restartPending = false
+    private var reloadJob: Job? = null
+    private val adapterScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var controlsEnabled = vpnEnabled
 
     class AppViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val appIcon: ImageView = view.findViewById(R.id.appIcon)
@@ -37,8 +42,7 @@ class AppsAdapter(
     }
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): AppViewHolder {
-        val view = LayoutInflater.from(parent.context)
-            .inflate(R.layout.item_app, parent, false)
+        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_app, parent, false)
         return AppViewHolder(view)
     }
 
@@ -50,59 +54,32 @@ class AppsAdapter(
         holder.packageName.text = pkg
         holder.appIcon.setImageDrawable(pm.getApplicationIcon(appInfo))
 
-        // Load saved states
-        var vpnApps = prefs.getStringSet("vpn_apps", null)
-        var blockedApps = prefs.getStringSet("blocked_apps", null)
-        val savedVersion = prefs.getInt("saved_app_version", -1)
-        val currentVersion = try {
-            pm.getPackageInfo(appContext.packageName, 0).versionCode
-        } catch (e: Exception) {
-            -1
-        }
+        val vpnApps = prefs.getStringSet("vpn_apps", emptySet())?.toMutableSet() ?: mutableSetOf()
+        val blockedApps = prefs.getStringSet("blocked_apps", emptySet())?.toMutableSet() ?: mutableSetOf()
 
-        val isFirstLaunchOrUpdate = savedVersion != currentVersion
-
-        // 🧩 On first install OR after each update: all switches ON, checkboxes UNCHECKED
-        if (isFirstLaunchOrUpdate) {
-            vpnApps = apps.map { it.packageName }.toMutableSet() // all ON
-            blockedApps = apps.map { it.packageName }.toMutableSet() // all unchecked = blocked
-            prefs.edit()
-                .putStringSet("vpn_apps", vpnApps)
-                .putStringSet("blocked_apps", blockedApps)
-                .putInt("saved_app_version", currentVersion)
-                .apply()
-        }
-
-        val vpnSet = vpnApps?.toMutableSet() ?: mutableSetOf()
-        val blockedSet = blockedApps?.toMutableSet() ?: mutableSetOf()
-
-        // Remove listeners to avoid unwanted triggers during binding
         holder.appSwitch.setOnCheckedChangeListener(null)
         holder.appCheckBox.setOnCheckedChangeListener(null)
 
-        // 🔘 Switch setup
-        holder.appSwitch.isEnabled = true
-        holder.appSwitch.isChecked = vpnSet.contains(pkg)
+        holder.appSwitch.isEnabled = controlsEnabled
+        holder.appCheckBox.isEnabled = controlsEnabled
 
-        // ☐ Checkbox setup
-        val isBlocked = blockedSet.contains(pkg)
-        holder.appCheckBox.isEnabled = true
-        holder.appCheckBox.isChecked = !isBlocked
+        holder.appSwitch.isChecked = vpnApps.contains(pkg)
+        holder.appCheckBox.isChecked = !blockedApps.contains(pkg)
 
-        // 🌐 Switch toggle → add/remove from VPN
         holder.appSwitch.setOnCheckedChangeListener { _, isChecked ->
-            val updated = prefs.getStringSet("vpn_apps", emptySet())!!.toMutableSet()
+            if (!controlsEnabled) return@setOnCheckedChangeListener
+            val updated = prefs.getStringSet("vpn_apps", emptySet())?.toMutableSet() ?: mutableSetOf()
             if (isChecked) updated.add(pkg) else updated.remove(pkg)
             prefs.edit().putStringSet("vpn_apps", HashSet(updated)).apply()
-            scheduleVpnRestart()
+            scheduleRulesReload()
         }
 
-        // 🚫 Checkbox toggle → add/remove from blocked list
         holder.appCheckBox.setOnCheckedChangeListener { _, isChecked ->
-            val updated = prefs.getStringSet("blocked_apps", emptySet())!!.toMutableSet()
+            if (!controlsEnabled) return@setOnCheckedChangeListener
+            val updated = prefs.getStringSet("blocked_apps", emptySet())?.toMutableSet() ?: mutableSetOf()
             if (!isChecked) updated.add(pkg) else updated.remove(pkg)
             prefs.edit().putStringSet("blocked_apps", HashSet(updated)).apply()
-            scheduleVpnRestart()
+            scheduleRulesReload()
         }
     }
 
@@ -122,34 +99,40 @@ class AppsAdapter(
 
     fun setVpnEnabled(enabled: Boolean) {
         vpnEnabled = enabled
+        controlsEnabled = enabled
         notifyDataSetChanged()
     }
 
-    private fun scheduleVpnRestart() {
-        if (restartPending) restartHandler.removeCallbacksAndMessages(null)
-        restartPending = true
-        restartHandler.postDelayed({
-            restartPending = false
-            restartVpn()
-        }, 1500)
+    private fun scheduleRulesReload() {
+        reloadJob?.cancel()
+        reloadJob = adapterScope.launch {
+            delay(2500)
+            withContext(Dispatchers.Main) { performRulesReloadWithUiFeedback() }
+        }
     }
 
-    private fun restartVpn() {
+    private fun performRulesReloadWithUiFeedback() {
         try {
-            val stopIntent = Intent(appContext, MyVpnService::class.java)
-            appContext.stopService(stopIntent)
-
-            val restartIntent = Intent(appContext, MyVpnService::class.java).apply {
-                action = "RELOAD_RULES"
+            val ctx = contextRef.get()
+            if (ctx is MainActivity) {
+                ctx.showLoading("Updating rules...")
+                mainHandler.postDelayed({ ctx.hideLoading() }, 2000)
             }
+            val intent = Intent(appContext, MyVpnService::class.java).apply { action = "RELOAD_RULES" }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                ContextCompat.startForegroundService(appContext, intent)
+            else
+                appContext.startService(intent)
+        } catch (_: Exception) {}
+    }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                ContextCompat.startForegroundService(appContext, restartIntent)
-            } else {
-                appContext.startService(restartIntent)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+    fun cleanup() {
+        reloadJob?.cancel()
+        adapterScope.cancel()
+    }
+
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) {
+        super.onDetachedFromRecyclerView(recyclerView)
+        cleanup()
     }
 }

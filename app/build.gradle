@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId "com.vpn.fwwithmlb"
-        minSdk 24
+        minSdk 26
         targetSdk 35
         versionCode 1
         versionName "1.0"
@@ -21,6 +21,9 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++17 -O2"
+                arguments "-DANDROID_ARM_NEON=TRUE", "-DCMAKE_ANDROID_PAGE_SIZE=16384"
+                cFlags "-Wl,-z,max-page-size=16384"
+                cppFlags "-Wl,-z,max-page-size=16384"
             }
         }
 
@@ -53,6 +56,7 @@ android {
         cmake {
             path "src/main/cpp/CMakeLists.txt"
             version "3.22.1"
+
         }
     }
 }
