@@ -42,40 +42,35 @@ class MainActivity : AppCompatActivity() {
     private val uiHandler = Handler(Looper.getMainLooper())
     private var vpnStartInProgress = false
 
-    private val vpnStartedReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            hideLoading()
-            vpnStartInProgress = false
-            vpnToggle.isEnabled = true
-            vpnToggle.isChecked = true
-            vpnStatusText.text = "Connected"
-            vpnSubtitleText.text = "Your connection is secure"
-            appsAdapter.setVpnEnabled(true)
-            Toast.makeText(this@MainActivity, "VPN Connected", Toast.LENGTH_SHORT).show()
-        }
-    }
+    private val prefs by lazy { getSharedPreferences("firewall_prefs", MODE_PRIVATE) }
 
-    private val vpnStoppedReceiver = object : BroadcastReceiver() {
+    private val vpnReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            hideLoading()
-            vpnStartInProgress = false
-            vpnToggle.isEnabled = true
-            vpnToggle.isChecked = false
-            vpnStatusText.text = "Disconnected"
-            vpnSubtitleText.text = "Your connection is not secure"
-            appsAdapter.setVpnEnabled(false)
-            Toast.makeText(this@MainActivity, "VPN Disconnected", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private val vpnDisconnectingReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            showLoading("Stopping VPN...")
+            when (intent?.action) {
+                "VPN_STARTED" -> {
+                    hideLoading()
+                    vpnStartInProgress = false
+                    updateVpnUi(true)
+                    vpnToggle.isEnabled = true
+                    vpnToggle.isChecked = true
+                    Toast.makeText(this@MainActivity, "VPN Connected", Toast.LENGTH_SHORT).show()
+                }
+                "VPN_STOPPED" -> {
+                    hideLoading()
+                    vpnStartInProgress = false
+                    updateVpnUi(false)
+                    vpnToggle.isEnabled = true
+                    vpnToggle.isChecked = false
+                    Toast.makeText(this@MainActivity, "VPN Disconnected", Toast.LENGTH_SHORT).show()
+                }
+                "VPN_DISCONNECTING" -> showLoading("Disconnecting VPN…")
+            }
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        if (PreferencesManager.isDarkModeEnabled(this)) AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+        if (PreferencesManager.isDarkModeEnabled(this))
+            AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         else AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
 
         super.onCreate(savedInstanceState)
@@ -86,7 +81,10 @@ class MainActivity : AppCompatActivity() {
 
         drawerLayout = findViewById(R.id.drawerLayout)
         navigationView = findViewById(R.id.navigationView)
-        toggle = ActionBarDrawerToggle(this, drawerLayout, toolbar, R.string.navigation_drawer_open, R.string.navigation_drawer_close)
+        toggle = ActionBarDrawerToggle(
+            this, drawerLayout, toolbar,
+            R.string.navigation_drawer_open, R.string.navigation_drawer_close
+        )
         drawerLayout.addDrawerListener(toggle)
         toggle.syncState()
 
@@ -109,32 +107,13 @@ class MainActivity : AppCompatActivity() {
         appsRecyclerView = findViewById(R.id.appsRecyclerView)
         themeToggleFab = findViewById(R.id.themeToggleFab)
 
-        loadingOverlay = FrameLayout(this).apply {
-            setBackgroundColor(0xAA000000.toInt())
-            visibility = View.GONE
-            isClickable = true
-            val progress = ProgressBar(this@MainActivity)
-            progress.isIndeterminate = true
-            addView(progress, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT).apply { gravity = android.view.Gravity.CENTER })
-            loadingText = TextView(this@MainActivity).apply {
-                text = "Starting VPN..."
-                setTextColor(android.graphics.Color.WHITE)
-                textSize = 18f
-                setPadding(0, 300, 0, 0)
-                gravity = android.view.Gravity.CENTER_HORIZONTAL
-            }
-            addView(loadingText)
-        }
-        addContentView(loadingOverlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-
+        setupLoadingOverlay()
         requestRuntimePermissions()
 
         appsRecyclerView.layoutManager = LinearLayoutManager(this)
         appsAdapter = AppsAdapter(loadInstalledApps(), packageManager, this, MyVpnService.isRunning)
         appsRecyclerView.adapter = appsAdapter
 
-        // sync UI from persisted flag first (fast)
-        val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
         val persistedRunning = prefs.getBoolean("vpn_running", false)
         updateVpnUi(persistedRunning)
         vpnToggle.isChecked = persistedRunning
@@ -144,70 +123,132 @@ class MainActivity : AppCompatActivity() {
                 vpnToggle.isChecked = !isChecked
                 return@setOnCheckedChangeListener
             }
+
             vpnStartInProgress = true
             vpnToggle.isEnabled = false
+
             if (isChecked) {
-                showLoading("Starting VPN...")
-                PreferencesManager.setVpnAlwaysOn(this, true)
+                showLoading("Starting VPN…")
                 startVpn()
             } else {
-                showLoading("Stopping VPN...")
-                PreferencesManager.setVpnAlwaysOn(this, false)
+                showLoading("Stopping VPN…")
                 stopVpn()
             }
         }
 
-        themeToggleFab.setImageResource(if (PreferencesManager.isDarkModeEnabled(this)) R.drawable.ic_baseline_dark_mode_24 else R.drawable.ic_baseline_light_mode_24)
+        themeToggleFab.setImageResource(
+            if (PreferencesManager.isDarkModeEnabled(this))
+                R.drawable.ic_baseline_dark_mode_24 else R.drawable.ic_baseline_light_mode_24
+        )
         themeToggleFab.setOnClickListener {
             val dark = PreferencesManager.isDarkModeEnabled(this)
             PreferencesManager.setDarkMode(this, !dark)
-            AppCompatDelegate.setDefaultNightMode(if (dark) AppCompatDelegate.MODE_NIGHT_NO else AppCompatDelegate.MODE_NIGHT_YES)
+            AppCompatDelegate.setDefaultNightMode(
+                if (dark) AppCompatDelegate.MODE_NIGHT_NO
+                else AppCompatDelegate.MODE_NIGHT_YES
+            )
             recreate()
         }
     }
 
+    private fun setupLoadingOverlay() {
+        loadingOverlay = FrameLayout(this).apply {
+            setBackgroundColor(0xAA000000.toInt())
+            visibility = View.GONE
+            isClickable = true
+
+            val progress = ProgressBar(this@MainActivity).apply { isIndeterminate = true }
+            addView(
+                progress,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = android.view.Gravity.CENTER }
+            )
+
+            loadingText = TextView(this@MainActivity).apply {
+                text = "Starting VPN…"
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 18f
+                setPadding(0, 300, 0, 0)
+                gravity = android.view.Gravity.CENTER_HORIZONTAL
+            }
+            addView(loadingText)
+        }
+        addContentView(
+            loadingOverlay,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        )
+    }
+
     private fun startVpn() {
         val intent = VpnService.prepare(this)
-        if (intent != null) startActivityForResult(intent, 100) else startVpnService()
+        if (intent != null) startActivityForResult(intent, 100)
+        else startVpnService()
     }
 
     private fun startVpnService() {
         val intent = Intent(this, MyVpnService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            startForegroundService(intent)
+        else startService(intent)
     }
 
     private fun stopVpn() {
         val intent = Intent(this, MyVpnService::class.java).apply { action = "DISCONNECT" }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+            startForegroundService(intent)
+        else startService(intent)
     }
 
     private fun updateVpnUi(connected: Boolean) {
         vpnStatusText.text = if (connected) "Connected" else "Disconnected"
         vpnSubtitleText.text = if (connected) "Your connection is secure" else "Your connection is not secure"
+        vpnToggle.isChecked = connected
         appsAdapter.setVpnEnabled(connected)
+        prefs.edit().putBoolean("vpn_running", connected).apply()
     }
 
     private fun openFeedbackForm() {
-        val url = "https://docs.google.com/forms/d/e/1FAIpQLSc2gBa4RwUtoNYz3l_zpuG7izPcUnKKMbzr-HriwbmkqVvuDg/viewform?usp=dialog"
+        val url =
+            "https://docs.google.com/forms/d/e/1FAIpQLSc2gBa4RwUtoNYz3l_zpuG7izPcUnKKMbzr-HriwbmkqVvuDg/viewform?usp=dialog"
         try {
-            val chromeIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply { setPackage("com.android.chrome"); addCategory(Intent.CATEGORY_BROWSABLE) }
+            val chromeIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage("com.android.chrome")
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
             startActivity(chromeIntent)
-        } catch (_: Exception) { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+        } catch (_: Exception) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        }
     }
 
     private fun loadInstalledApps(): List<ApplicationInfo> {
         val pm = packageManager
         val launchIntent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-        val launchable = pm.queryIntentActivities(launchIntent, 0).mapNotNull { it.activityInfo?.applicationInfo }
+        val launchable = pm.queryIntentActivities(launchIntent, 0)
+            .mapNotNull { it.activityInfo?.applicationInfo }
         val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        return (launchable + installed).distinctBy { it.packageName }.filter { it.packageName != packageName }
+        return (launchable + installed)
+            .distinctBy { it.packageName }
+            .filter { it.packageName != packageName }
             .sortedBy { pm.getApplicationLabel(it).toString().lowercase() }
     }
 
     private fun requestRuntimePermissions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 200)
+            ContextCompat.checkSelfPermission(
+                this, Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                200
+            )
         }
     }
 
@@ -216,7 +257,7 @@ class MainActivity : AppCompatActivity() {
         loadingOverlay.visibility = View.VISIBLE
     }
 
-  fun hideLoading() {
+    fun hideLoading() {
         loadingOverlay.visibility = View.GONE
     }
 
@@ -233,43 +274,29 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(vpnStartedReceiver, IntentFilter("VPN_STARTED"), Context.RECEIVER_NOT_EXPORTED)
-                registerReceiver(vpnStoppedReceiver, IntentFilter("VPN_STOPPED"), Context.RECEIVER_NOT_EXPORTED)
-                registerReceiver(vpnDisconnectingReceiver, IntentFilter("VPN_DISCONNECTING"), Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                registerReceiver(vpnStartedReceiver, IntentFilter("VPN_STARTED"))
-                registerReceiver(vpnStoppedReceiver, IntentFilter("VPN_STOPPED"))
-                registerReceiver(vpnDisconnectingReceiver, IntentFilter("VPN_DISCONNECTING"))
-            }
-        } catch (_: Exception) {}
+        val filter = IntentFilter().apply {
+            addAction("VPN_STARTED")
+            addAction("VPN_STOPPED")
+            addAction("VPN_DISCONNECTING")
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            registerReceiver(vpnReceiver, filter, RECEIVER_NOT_EXPORTED)
+        else registerReceiver(vpnReceiver, filter)
 
-        // Query live service state; service will reply with VPN_STARTED or VPN_STOPPED
-        try {
-            val query = Intent(this, MyVpnService::class.java).apply { action = "VPN_STATUS_QUERY" }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(query) else startService(query)
-        } catch (_: Exception) {}
-
-        // read persisted flag as immediate fallback
-        val prefs = getSharedPreferences("firewall_prefs", MODE_PRIVATE)
         val persistedRunning = prefs.getBoolean("vpn_running", false)
         updateVpnUi(persistedRunning)
         vpnToggle.isChecked = persistedRunning
 
-        // failsafe: hide loading after 10s
         uiHandler.postDelayed({
             hideLoading()
             vpnStartInProgress = false
             vpnToggle.isEnabled = true
-        }, 10000)
+        }, 8000)
     }
 
     override fun onPause() {
         super.onPause()
-        try { unregisterReceiver(vpnStartedReceiver) } catch (_: Exception) {}
-        try { unregisterReceiver(vpnStoppedReceiver) } catch (_: Exception) {}
-        try { unregisterReceiver(vpnDisconnectingReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(vpnReceiver) } catch (_: Exception) {}
     }
 
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
@@ -287,8 +314,10 @@ class MainActivity : AppCompatActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_instructions -> {
-                AlertDialog.Builder(this).setTitle("Instructions")
-                    .setMessage("""
+                AlertDialog.Builder(this)
+                    .setTitle("Instructions")
+                    .setMessage(
+                        """
                         🔹 Switch → Route app traffic through firewall VPN
                         🔹 CheckBox → Block internet completely for the app
                         🔹 Link Scanner → Scan URLs for safety
@@ -297,11 +326,14 @@ class MainActivity : AppCompatActivity() {
                         🔹 Theme Button → Toggle light/dark mode
                         🔹 Search → Quickly find apps
                         🔹 Feedback → Google Form
-                        🔹 Settings → Configure app preferences
-                    """.trimIndent())
-                    .setPositiveButton("OK", null).show()
+                        🔹 Settings → Configure preferences
+                        """.trimIndent()
+                    )
+                    .setPositiveButton("OK", null)
+                    .show()
                 true
             }
+
             else -> super.onOptionsItemSelected(item)
         }
     }

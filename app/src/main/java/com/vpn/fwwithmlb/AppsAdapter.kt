@@ -106,24 +106,54 @@ class AppsAdapter(
     private fun scheduleRulesReload() {
         reloadJob?.cancel()
         reloadJob = adapterScope.launch {
-            delay(2500)
+            delay(2500) // debounce rapid changes
             withContext(Dispatchers.Main) { performRulesReloadWithUiFeedback() }
         }
     }
 
+    /**
+     * Automatically restarts VPN when rules are updated.
+     * Uses the DISCONNECT action to properly stop the service, waits for it to stop,
+     * then restarts it cleanly so new rules apply.
+     */
     private fun performRulesReloadWithUiFeedback() {
-        try {
-            val ctx = contextRef.get()
-            if (ctx is MainActivity) {
-                ctx.showLoading("Updating rules...")
-                mainHandler.postDelayed({ ctx.hideLoading() }, 2000)
+        val ctx = contextRef.get()
+        if (ctx is MainActivity) ctx.showLoading("Updating rules...")
+
+        adapterScope.launch(Dispatchers.IO) {
+            try {
+                // 1️⃣ Send proper DISCONNECT command so MyVpnService stops cleanly
+                val stopIntent = Intent(appContext, MyVpnService::class.java).apply {
+                    action = "DISCONNECT"
+                }
+                appContext.startService(stopIntent)
+
+                // 2️⃣ Wait until VPN actually stops (based on vpn_running flag)
+                val prefs = appContext.getSharedPreferences("firewall_prefs", Context.MODE_PRIVATE)
+                var waited = 0
+                while (prefs.getBoolean("vpn_running", true) && waited < 5000) {
+                    delay(250)
+                    waited += 250
+                }
+
+                // 3️⃣ Restart VPN service cleanly
+                val startIntent = Intent(appContext, MyVpnService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    ContextCompat.startForegroundService(appContext, startIntent)
+                else
+                    appContext.startService(startIntent)
+
+                // 4️⃣ Hide the overlay after restart
+                withContext(Dispatchers.Main) {
+                    delay(2000)
+                    if (ctx is MainActivity) ctx.hideLoading()
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    if (ctx is MainActivity) ctx.hideLoading()
+                }
             }
-            val intent = Intent(appContext, MyVpnService::class.java).apply { action = "RELOAD_RULES" }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                ContextCompat.startForegroundService(appContext, intent)
-            else
-                appContext.startService(intent)
-        } catch (_: Exception) {}
+        }
     }
 
     fun cleanup() {
